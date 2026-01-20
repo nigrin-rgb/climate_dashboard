@@ -1,221 +1,208 @@
-# ---------------------------------------------------------
-# Task 3 — World Map (Spatial Patterns) with MONTH RANGE slider (bottom)
-# ---------------------------------------------------------
 
 from imports import *
 
+
 def show_worldmap():
-    st.title("🗺️ World Map")
-    st.caption(
-        "Explore where events happen globally. "
-        "Filter by event type / severity / encoding, then use the month range slider (bottom) to move through time."
-    )
-
-    # -----------------------
-    # Load + clean
-    # -----------------------
-    gc = load_gc()
-    df = gc.copy()
-
-    # Ensure numeric
-    df["latitude"] = pd.to_numeric(df.get("latitude"), errors="coerce")
-    df["longitude"] = pd.to_numeric(df.get("longitude"), errors="coerce")
-    df["severity"] = pd.to_numeric(df.get("severity"), errors="coerce")
-    df["economic_impact_million_usd"] = pd.to_numeric(df.get("economic_impact_million_usd"), errors="coerce")
-    df["year"] = pd.to_numeric(df.get("year"), errors="coerce")
-    df["month"] = pd.to_numeric(df.get("month"), errors="coerce")
-
-    # Drop rows without coordinates / time
-    df = df.dropna(subset=["latitude", "longitude", "year", "month"]).copy()
-    df["year"] = df["year"].astype(int)
-    df["month"] = df["month"].astype(int)
-
-    # Remove partial year 2025 (if relevant)
-    df = df[df["year"] < 2025].copy()
-
-    # Monthly time key
-    df["date"] = pd.to_datetime(dict(year=df["year"], month=df["month"], day=1), errors="coerce")
-    df = df.dropna(subset=["date"]).copy()
-
-    # Clean event type label for UI/hover
-    if "event_type" in df.columns:
-        df["event_type_clean"] = (
-            df["event_type"].astype(str)
-            .str.replace("_", " ", regex=False)
-            .str.title()
-        )
-    else:
-        df["event_type_clean"] = "Unknown"
-
-    # -----------------------
-    # Filters (NOT time)
-    # -----------------------
-    st.markdown("### Filters")
-
-    col1, col2, col3, col4 = st.columns([2.2, 2.0, 2.0, 2.2])
-
-    with col1:
-        # Show cleaned names in UI, but filter by original values
-        if "event_type" in df.columns:
-            type_map = (
-                df[["event_type", "event_type_clean"]]
-                .dropna()
-                .drop_duplicates()
-                .sort_values("event_type_clean")
-            )
-            type_labels = type_map["event_type_clean"].tolist()
-            label_to_raw = dict(zip(type_map["event_type_clean"], type_map["event_type"]))
-
-            selected_type_labels = st.multiselect(
-                "Event types (optional)",
-                options=type_labels,
-                default=[],
-                key="map_event_types",
-            )
-            selected_types_raw = [label_to_raw[x] for x in selected_type_labels]
-        else:
-            selected_types_raw = []
-
-    with col2:
-        sev_min = float(df["severity"].min()) if df["severity"].notna().any() else 0.0
-        sev_max = float(df["severity"].max()) if df["severity"].notna().any() else 10.0
-        severity_range = st.slider(
-            "Severity range",
-            min_value=float(sev_min),
-            max_value=float(sev_max),
-            value=(float(sev_min), float(sev_max)),
-            key="map_severity_range",
-        )
-
-    with col3:
-        # nicer labels
-        color_by_label = st.selectbox(
-            "Color by",
-            ["Severity", "Event Type", "Economic Impact (M USD)"],
-            index=0,
-            key="map_color_by",
-        )
-
-    with col4:
-        size_by_label = st.selectbox(
-            "Size by",
-            ["Economic Impact (M USD)", "Severity", "None"],
-            index=0,
-            key="map_size_by",
-        )
-
-    # map UI labels -> actual column names
-    color_by = {
-        "Severity": "severity",
-        "Event Type": "event_type_clean",
-        "Economic Impact (M USD)": "economic_impact_million_usd",
-    }[color_by_label]
-
-    size_by = {
-        "Economic Impact (M USD)": "economic_impact_million_usd",
-        "Severity": "severity",
-        "None": None,
-    }[size_by_label]
-
-    # Apply filters (except time)
-    df_f = df.copy()
-
-    if selected_types_raw and "event_type" in df_f.columns:
-        df_f = df_f[df_f["event_type"].isin(selected_types_raw)].copy()
-
-    if df_f["severity"].notna().any():
-        df_f = df_f[df_f["severity"].between(severity_range[0], severity_range[1], inclusive="both")].copy()
-
-    # Safety: if nothing left, stop early
-    if df_f.empty:
-        st.warning("No data after filters. Try widening filters (event types / severity).")
+    # 1. טעינת נתונים
+    df = load_gc()
+    if df.empty:
+        st.error("No data available.")
         return
 
-    # Optional size column (must be non-negative)
-    size_col = None
-    if size_by is not None and size_by in df_f.columns:
-        size_col = size_by
-        df_f[size_col] = df_f[size_col].fillna(0).clip(lower=0)
+    df["date"] = pd.to_datetime(df["date"])
 
-    # -----------------------
-    # Quick stats (ALL filtered, before time)
-    # -----------------------
-    st.markdown("### Quick stats (current filters)")
-    s1, s2, s3 = st.columns(3)
-    with s1:
-        st.metric("Events (filtered)", f"{len(df_f):,}")
-    with s2:
-        st.metric("Countries", f"{df_f['country'].nunique():,}" if "country" in df_f.columns else "n/a")
-    with s3:
-        st.metric("Date span", f"{df_f['date'].min():%Y-%m} → {df_f['date'].max():%Y-%m}")
+    st.title("🌍 Global Regional Analysis")
+    st.caption("Click any continent on the map to update the breakdown chart below.")
 
-    st.write("")
+    # --- אתחול Session State ---
+    if "selected_continent_drilldown" not in st.session_state:
+        st.session_state["selected_continent_drilldown"] = "Africa"
 
-    # -----------------------
-    # Default time range = ALL months (so map is NOT empty)
-    # Slider will be placed at the BOTTOM, but we need its value now.
-    # We'll set it via session_state if not set yet.
-    # -----------------------
-    min_date = df_f["date"].min()
-    max_date = df_f["date"].max()
+    # 2. מיפוי ורשימות (כולל סהרה המערבית)
+    input_country_to_continent = {
+        'Egypt': 'Africa', 'Nigeria': 'Africa', 'South Africa': 'Africa',
+        'Bangladesh': 'Asia', 'China': 'Asia', 'India': 'Asia', 'Indonesia': 'Asia', 'Iraq': 'Asia',
+        'Israel': 'Asia',
+        'Japan': 'Asia', 'Kazakhstan': 'Asia', 'Malaysia': 'Asia', 'Pakistan': 'Asia', 'Philippines': 'Asia',
+        'Qatar': 'Asia', 'Saudi Arabia': 'Asia', 'Singapore': 'Asia', 'South Korea': 'Asia', 'Thailand': 'Asia',
+        'Turkey': 'Asia', 'UAE': 'Asia', 'Vietnam': 'Asia',
+        'Austria': 'Europe', 'Belgium': 'Europe', 'Czech Republic': 'Europe', 'Denmark': 'Europe',
+        'Finland': 'Europe',
+        'France': 'Europe', 'Germany': 'Europe', 'Greece': 'Europe', 'Hungary': 'Europe', 'Ireland': 'Europe',
+        'Italy': 'Europe', 'Netherlands': 'Europe', 'Poland': 'Europe', 'Portugal': 'Europe', 'Romania': 'Europe',
+        'Russia': 'Europe', 'Sweden': 'Europe', 'Switzerland': 'Europe', 'United Kingdom': 'Europe',
+        'Canada': 'North America', 'Mexico': 'North America', 'United States': 'North America',
+        'Argentina': 'South America', 'Brazil': 'South America', 'Chile': 'South America',
+        'Colombia': 'South America',
+        'Peru': 'South America',
+        'Australia': 'Oceania', 'New Zealand': 'Oceania'
+    }
 
-    if "map_month_range" not in st.session_state:
-        st.session_state["map_month_range"] = (min_date.to_pydatetime(), max_date.to_pydatetime())
+    full_continents_lists = {
+        'Africa': ['Algeria', 'Angola', 'Benin', 'Botswana', 'Burkina Faso', 'Burundi', 'Cameroon', 'Cape Verde',
+                   'Central African Republic', 'Chad', 'Comoros', 'Congo', 'Democratic Republic of the Congo',
+                   'Djibouti', 'Egypt', 'Equatorial Guinea', 'Eritrea', 'Eswatini', 'Ethiopia', 'Gabon', 'Gambia',
+                   'Ghana', 'Guinea', 'Guinea-Bissau', 'Ivory Coast', 'Kenya', 'Lesotho', 'Liberia', 'Libya',
+                   'Madagascar', 'Malawi', 'Mali', 'Mauritania', 'Mauritius', 'Morocco', 'Mozambique', 'Namibia',
+                   'Niger', 'Nigeria', 'Rwanda', 'Sao Tome and Principe', 'Senegal', 'Seychelles', 'Sierra Leone',
+                   'Somalia', 'South Africa', 'South Sudan', 'Sudan', 'Tanzania', 'Togo', 'Tunisia', 'Uganda',
+                   'Zambia',
+                   'Zimbabwe', 'Western Sahara'],
+        'Asia': ['Afghanistan', 'Armenia', 'Azerbaijan', 'Bahrain', 'Bangladesh', 'Bhutan', 'Brunei', 'Cambodia',
+                 'China', 'Cyprus', 'Georgia', 'India', 'Indonesia', 'Iran', 'Iraq', 'Israel', 'Japan', 'Jordan',
+                 'Kazakhstan', 'Kuwait', 'Kyrgyzstan', 'Laos', 'Lebanon', 'Malaysia', 'Maldives', 'Mongolia',
+                 'Myanmar',
+                 'Nepal', 'North Korea', 'Oman', 'Pakistan', 'Palestine', 'Philippines', 'Qatar', 'Saudi Arabia',
+                 'Singapore', 'South Korea', 'Sri Lanka', 'Syria', 'Taiwan', 'Tajikistan', 'Thailand',
+                 'Timor-Leste',
+                 'Turkey', 'Russia', 'Turkmenistan', 'UAE', 'Uzbekistan', 'Vietnam', 'Yemen'],
+        'Europe': ['Albania', 'Andorra', 'Austria', 'Belarus', 'Belgium', 'Bosnia and Herzegovina', 'Bulgaria',
+                   'Croatia', 'Czech Republic', 'Denmark', 'Estonia', 'Finland', 'France', 'Germany', 'Greece',
+                   'Hungary', 'Iceland', 'Ireland', 'Italy', 'Kosovo', 'Latvia', 'Liechtenstein', 'Lithuania',
+                   'Luxembourg', 'Malta', 'Moldova', 'Monaco', 'Montenegro', 'Netherlands', 'North Macedonia',
+                   'Norway',
+                   'Poland', 'Portugal', 'Romania', 'San Marino', 'Serbia', 'Slovakia', 'Slovenia', 'Spain',
+                   'Sweden',
+                   'Switzerland', 'Ukraine', 'United Kingdom', 'Vatican City'],
+        'North America': ['Antigua and Barbuda', 'Bahamas', 'Barbados', 'Belize', 'Canada', 'Costa Rica', 'Cuba',
+                          'Dominica', 'Dominican Republic', 'El Salvador', 'Grenada', 'Guatemala', 'Haiti',
+                          'Honduras',
+                          'Jamaica', 'Mexico', 'Nicaragua', 'Panama', 'Saint Kitts and Nevis', 'Saint Lucia',
+                          'Saint Vincent and the Grenadines', 'Trinidad and Tobago', 'United States'],
+        'South America': ['Argentina', 'Bolivia', 'Brazil', 'Chile', 'Colombia', 'Ecuador', 'Guyana', 'Paraguay',
+                          'Peru', 'Suriname', 'Uruguay', 'Venezuela'],
+        'Oceania': ['Australia', 'Fiji', 'Kiribati', 'Marshall Islands', 'Micronesia', 'Nauru', 'New Zealand',
+                    'Palau',
+                    'Papua New Guinea', 'Samoa', 'Solomon Islands', 'Tonga', 'Tuvalu', 'Vanuatu']
+    }
 
-    start_dt, end_dt = st.session_state["map_month_range"]
-    start_dt = pd.to_datetime(start_dt)
-    end_dt = pd.to_datetime(end_dt)
+    df['continent'] = df['country'].map(input_country_to_continent)
 
-    # Filter by the current range (initially: all months)
-    df_t = df_f[(df_f["date"] >= start_dt) & (df_f["date"] <= end_dt)].copy()
+    # 3. Controls
+    st.markdown("### Controls")
+    c1, c2, c3 = st.columns([2.2, 2.0, 2.2])
+    with c1:
+        metric_label = st.selectbox("Color by metric",
+                                    ["Number of events", "Total economic impact (M USD)", "Total injuries",
+                                     "Total deaths", "Severity (mean)"], index=1, key="t3_metric")
+    with c2:
+        allow_norm = metric_label != "Severity (mean)"
+        norm_choice = st.radio("Scale", ["Raw", "Normalize (%)"], horizontal=True, disabled=not allow_norm,
+                               key="t3_scale")
+        normalize = (norm_choice != "Raw") and allow_norm
+    with c3:
+        min_date, max_date = df["date"].min().to_pydatetime(), df["date"].max().to_pydatetime()
+        time_range = st.slider("Time range", min_value=min_date, max_value=max_date,
+                               value=st.session_state.get("t3_time_range", (min_date, max_date)), format="YYYY-MM")
+        st.session_state["t3_time_range"] = time_range
 
-    # -----------------------
-    # MAP
-    # -----------------------
-    title_range = f"{start_dt:%Y-%m} → {end_dt:%Y-%m}"
-    st.subheader(f"World map — {title_range}")
+    # 4. Data Processing
+    df_t = df[(df["date"] >= pd.to_datetime(time_range[0])) & (df["date"] <= pd.to_datetime(time_range[1]))].copy()
+    if df_t.empty:
+        st.warning("No data for selection.")
+        return
 
-    hover_cols = []
-    for c in [
-        "year", "month", "country", "event_type_clean", "severity",
-        "economic_impact_million_usd", "affected_population", "deaths", "injuries"
-    ]:
-        if c in df_t.columns:
-            hover_cols.append(c)
+    # אגרגציה למפה
+    metric_map = {"Number of events": "event_type", "Total economic impact (M USD)": "economic_impact_million_usd",
+                  "Total injuries": "injuries", "Total deaths": "deaths", "Severity (mean)": "severity"}
+    col_name = metric_map[metric_label]
 
-    fig_map = px.scatter_geo(
-        df_t,
-        lat="latitude",
-        lon="longitude",
-        color=color_by if color_by in df_t.columns else None,
-        size=size_col if (size_col is not None and size_col in df_t.columns) else None,
-        hover_data=hover_cols,
-        projection="natural earth",
+    if metric_label == "Number of events":
+        cont_stats = df_t.groupby('continent').size().reset_index(name='value')
+    else:
+        cont_stats = df_t.groupby('continent')[col_name].agg(
+            'mean' if "Severity" in metric_label else 'sum').reset_index(name='value')
+
+    if normalize:
+        total_val = cont_stats['value'].sum()
+        if total_val > 0: cont_stats['value'] = (cont_stats['value'] / total_val) * 100
+
+    # הרחבה לכל המדינות לצביעה
+    plot_rows = []
+    for _, row in cont_stats.iterrows():
+        if row['continent'] in full_continents_lists:
+            for country in full_continents_lists[row['continent']]:
+                plot_rows.append({'country': country, 'continent': row['continent'], 'value': row['value']})
+    plot_df = pd.DataFrame(plot_rows)
+
+    # 5. הצגת מפה
+    color_scale = px.colors.sequential.Reds if "deaths" in metric_label.lower() else px.colors.sequential.Viridis
+    fig_map = px.choropleth(
+        plot_df, locations="country", locationmode="country names", color="value",
+        hover_name="continent", color_continuous_scale=color_scale, projection="natural earth"
     )
+    fig_map.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=500,
+                          geo=dict(showcountries=True, countrycolor="white"))
 
-    fig_map.update_layout(
-        template="plotly_dark",
-        height=650,
-        margin=dict(l=10, r=10, t=50, b=10),
-        title="Event locations (after filters + time range)"
-    )
-    fig_map.update_traces(marker=dict(opacity=0.75))
-    st.plotly_chart(fig_map, use_container_width=True)
+    # לכידת לחיצה באמצעות point_index (יותר יציב מ-custom_data)
+    selection = st.plotly_chart(fig_map, use_container_width=True, on_select="rerun", selection_mode="points")
 
-    # -----------------------
-    # TIME SLIDER (BOTTOM) — month RANGE
-    # -----------------------
-    st.markdown("### Time range (monthly)")
+    if selection and "selection" in selection and selection["selection"]["points"]:
+        idx = selection["selection"]["points"][0]["point_index"]
+        clicked_cont = plot_df.iloc[idx]["continent"]
 
-    month_range = st.slider(
-        "Choose month range",
-        min_value=min_date.to_pydatetime(),
-        max_value=max_date.to_pydatetime(),
-        value=st.session_state["map_month_range"],
-        format="YYYY-MM",
-        key="map_month_range",
-        help="Default = full range, so the initial map shows all events."
-    )
+        if clicked_cont != st.session_state["selected_continent_drilldown"]:
+            st.session_state["selected_continent_drilldown"] = clicked_cont
+            st.rerun()
 
-    # optional: show what’s selected in text
-    st.caption(f"Showing events from **{pd.to_datetime(month_range[0]):%Y-%m}** to **{pd.to_datetime(month_range[1]):%Y-%m}**.")
+        # 6. Deep Dive (סגנון ישן וחתיך)
+        st.divider()
+        active_continent = st.session_state["selected_continent_drilldown"]
+        st.subheader(f"🔍 Deep Dive: {active_continent}")
+
+        available_conts = sorted(df_t['continent'].dropna().unique())
+        if not available_conts:
+            st.info("No data for drilldown.")
+        else:
+            d1, d2 = st.columns([1, 3])
+            with d1:
+                try:
+                    curr_idx = available_conts.index(active_continent)
+                except ValueError:
+                    curr_idx = 0
+
+                chosen_cont = st.selectbox("Select Continent:", available_conts, index=curr_idx,
+                                           key="continent_selector")
+                if chosen_cont != active_continent:
+                    st.session_state["selected_continent_drilldown"] = chosen_cont
+                    st.rerun()
+
+                c_data = df_t[df_t['continent'] == active_continent]
+
+                # הצגת המדדים
+                st.metric("Total Events", len(c_data))
+                st.metric("Avg Severity", f"{c_data['severity'].mean():.1f}/10")
+                # התיקון כאן: שינינו ל-1f.
+                st.metric("Total Impact", f"${c_data['economic_impact_million_usd'].sum():,.1f}M")
+
+            with d2:
+                if not c_data.empty:
+                    # הכנה להיסטוגרמה
+                    type_counts = c_data['event_type'].value_counts().reset_index()
+                    type_counts.columns = ['Event Type', 'Count']
+
+                    sev_per_type = c_data.groupby('event_type')['severity'].mean().reset_index()
+                    type_counts = type_counts.merge(sev_per_type, left_on='Event Type', right_on='event_type')
+
+                    fig_hist = px.bar(
+                        type_counts,
+                        x='Event Type',
+                        y='Count',
+                        color='severity',
+                        color_continuous_scale='Viridis',
+                        text='Count',
+                        title=f"Event Distribution in {active_continent}",
+                        labels={'severity': 'Avg Severity'},
+                        # כאן אנחנו מגדירים את הפורמט של ההובר ל-1 ספרה אחרי הנקודה
+                        hover_data={
+                            'Event Type': True,
+                            'Count': True,
+                            'severity': ':.1f'  # ה-f.1 אומר ספרה אחת אחרי הנקודה
+                        }
+                    )
+
+                    fig_hist.update_traces(textposition='outside')
+                    fig_hist.update_layout(height=380, margin=dict(t=40, l=0, r=0, b=0))
+                    st.plotly_chart(fig_hist, use_container_width=True)
+                else:
+                    st.warning("No data found for this selection.")

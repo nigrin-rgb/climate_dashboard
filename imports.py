@@ -7,6 +7,7 @@ import numpy as np
 import calendar
 
 
+
 @st.cache_data
 def load_gc():
     csv_path = Path(__file__).parent / "data" / "global_climate_events_economic_impact_2020_2025.csv"

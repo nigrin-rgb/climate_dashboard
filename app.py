@@ -4,7 +4,7 @@ import streamlit as st
 from _1_temporal import show_temporal
 from _2_severity import show_severity
 from _3_worldmap import show_worldmap
-
+from _4_analysis import show_analysis
 # -------------------------------------------------
 # Page config
 # -------------------------------------------------
@@ -26,6 +26,7 @@ page = st.sidebar.radio(
         "🕒 Temporal Patterns",
         "💥 Severity vs Economic Impact",
         "🗺️ World Map",
+        "📊 Analysis"
     ],
 )
 
@@ -63,3 +64,7 @@ elif page == "💥 Severity vs Economic Impact":
 
 elif page == "🗺️ World Map":
     show_worldmap()
+
+elif page == "📊 Analysis":
+    show_analysis()
+
