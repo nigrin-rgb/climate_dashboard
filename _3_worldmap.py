@@ -96,7 +96,7 @@ def show_worldmap():
                                value=st.session_state.get("t3_time_range", (min_date, max_date)), format="YYYY-MM")
         st.session_state["t3_time_range"] = time_range
 
-    # 4. Data Processing
+    # 4 Data Processing
     df_t = df[(df["date"] >= pd.to_datetime(time_range[0])) & (df["date"] <= pd.to_datetime(time_range[1]))].copy()
     if df_t.empty:
         st.warning("No data for selection.")
